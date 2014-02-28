@@ -25,6 +25,8 @@ use std::hashmap::HashMap;
 use extra::getopts;
 use extra::arc::MutexArc;
 
+use extra::arc::RWArc;
+
 static SERVER_NAME : &'static str = "Zhtta Version 0.5";
 
 static IP : &'static str = "127.0.0.1";
@@ -42,6 +44,8 @@ static COUNTER_STYLE : &'static str = "<doctype !html><html><head><title>Hello, 
              <body>";
 
 static mut visitor_count : uint = 0;
+
+//static counter: RWArc<int> = RWArc::new(0);
 
 struct HTTP_Request {
     // Use peer_name as the key to access TcpStream in hashmap. 
@@ -95,7 +99,7 @@ impl WebServer {
         let request_queue_arc = self.request_queue_arc.clone();
         let shared_notify_chan = self.shared_notify_chan.clone();
         let stream_map_arc = self.stream_map_arc.clone();
-                
+
         spawn(proc() {
             let mut acceptor = net::tcp::TcpListener::bind(addr).listen();
             println!("{:s} listening on {:s} (serving from: {:s}).", 
@@ -110,7 +114,11 @@ impl WebServer {
                 
                 // Spawn a task to handle the connection.
                 spawn(proc() {
+                    
                     unsafe { visitor_count += 1; } // TODO: Fix unsafe counter
+                    
+                    //counter.write(|count: &mut int| { *count += 1;});
+                    
                     let request_queue_arc = queue_port.recv();
                   
                     let mut stream = stream;
@@ -170,11 +178,15 @@ impl WebServer {
     // TODO: Safe visitor counter.
     fn respond_with_counter_page(stream: Option<std::io::net::tcp::TcpStream>) {
         let mut stream = stream;
+        
+        //let mut counter2: int = 0;
+        //counter.read(|count| {counter2= count.clone()});
+        
         let response: ~str = 
             format!("{:s}{:s}<h1>Greetings, Krusty!</h1>
                      <h2>Visitor count: {:u}</h2></body></html>\r\n", 
                     HTTP_OK, COUNTER_STYLE, 
-                    unsafe { visitor_count } );
+                    unsafe{ visitor_count });
         debug!("Responding to counter request");
         stream.write(response.as_bytes());
     }
@@ -191,6 +203,19 @@ impl WebServer {
     // TODO: Server-side gashing.
     fn respond_with_dynamic_page(stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
         // for now, just serve as static file
+
+
+        let mut stream = stream;
+        let test: ~str = ~"TestTing";
+        let response: ~str = ~"response";
+        //println!("{:s}", stream.read_to_str());
+        while (){
+        println!("{:s}", stream.read_to_str());
+        }
+
+
+        stream.write(response.as_bytes());
+
         WebServer::respond_with_static_file(stream, path);
     }
     
