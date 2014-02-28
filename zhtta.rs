@@ -88,14 +88,20 @@ impl WebServer {
     }
     
     fn run(&mut self) {
-        self.listen();
+        let mut vis_count=0;
+        let counter: RWArc<uint> = RWArc::new(vis_count);
+        let counter2=counter.clone();
+        self.listen(counter2);
         self.dequeue_static_file_request();
+        
+
     }
     
-    fn listen(&mut self) {
+    fn listen(&mut self,counter:RWArc<uint>) {
         let addr = from_str::<SocketAddr>(format!("{:s}:{:u}", self.ip, self.port)).expect("Address error.");
         let www_dir_path_str = self.www_dir_path.as_str().expect("invalid www path?").to_owned();
-        
+        let (port, chan) = Chan::new();
+        chan.send(counter);
         let request_queue_arc = self.request_queue_arc.clone();
         let shared_notify_chan = self.shared_notify_chan.clone();
         let stream_map_arc = self.stream_map_arc.clone();
@@ -105,19 +111,22 @@ impl WebServer {
             println!("{:s} listening on {:s} (serving from: {:s}).", 
                      SERVER_NAME, addr.to_str(), www_dir_path_str);
             
+            
             for stream in acceptor.incoming() {
                 let (queue_port, queue_chan) = Chan::new();
                 queue_chan.send(request_queue_arc.clone());
-                
+                let (port1, chan1) = Chan::new();
+                let counter=port.recv();
+                chan1.send(counter);
                 let notify_chan = shared_notify_chan.clone();
                 let stream_map_arc = stream_map_arc.clone();
                 
                 // Spawn a task to handle the connection.
                 spawn(proc() {
                     
-                    unsafe { visitor_count += 1; } // TODO: Fix unsafe counter
-                    
-                    //counter.write(|count: &mut int| { *count += 1;});
+                   // unsafe { visitor_count += 1; } // TODO: Fix unsafe counter
+                    let counter=port1.recv();
+                    counter.write(|visitor_count: &mut uint| { *visitor_count += 1;});
                     
                     let request_queue_arc = queue_port.recv();
                   
@@ -147,7 +156,7 @@ impl WebServer {
                              
                         if path_str == ~"./" {
                             debug!("===== Counter Page request =====");
-                            WebServer::respond_with_counter_page(stream);
+                            WebServer::respond_with_counter_page(stream,counter);
                             debug!("=====Terminated connection from [{:s}].=====", peer_name);
                         } else if !path_obj.exists() || path_obj.is_dir() {
                             debug!("===== Error page request =====");
@@ -176,17 +185,17 @@ impl WebServer {
     }
 
     // TODO: Safe visitor counter.
-    fn respond_with_counter_page(stream: Option<std::io::net::tcp::TcpStream>) {
+    fn respond_with_counter_page(stream: Option<std::io::net::tcp::TcpStream>,counter:RWArc<uint>) {
         let mut stream = stream;
         
-        //let mut counter2: int = 0;
-        //counter.read(|count| {counter2= count.clone()});
+        let mut counter2: uint = 0;
+        counter.read(|count| {counter2= count.clone()});
         
         let response: ~str = 
             format!("{:s}{:s}<h1>Greetings, Krusty!</h1>
                      <h2>Visitor count: {:u}</h2></body></html>\r\n", 
                     HTTP_OK, COUNTER_STYLE, 
-                    unsafe{ visitor_count });
+                    counter2);
         debug!("Responding to counter request");
         stream.write(response.as_bytes());
     }
@@ -201,11 +210,11 @@ impl WebServer {
     }
     
     // TODO: Server-side gashing.
-    fn respond_with_dynamic_page(stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
+   fn respond_with_dynamic_page(stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
         // for now, just serve as static file
 
 
-        let mut stream = stream;
+      /*  let mut stream = stream;
         let test: ~str = ~"TestTing";
         let response: ~str = ~"response";
         //println!("{:s}", stream.read_to_str());
@@ -214,7 +223,7 @@ impl WebServer {
         }
 
 
-        stream.write(response.as_bytes());
+        stream.write(response.as_bytes());*/
 
         WebServer::respond_with_static_file(stream, path);
     }
