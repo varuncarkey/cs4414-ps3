@@ -16,16 +16,18 @@
 #[feature(globs)];
 extern mod extra;
 
+
 use std::io::*;
 use std::io::net::ip::{SocketAddr};
 use std::{os, str, libc, from_str};
 use std::path::Path;
 use std::hashmap::HashMap;
+use std::io::File;
+
 
 use extra::getopts;
 use extra::arc::MutexArc;
-
-use extra::arc::RWArc;
+pub mod gash;
 
 static SERVER_NAME : &'static str = "Zhtta Version 0.5";
 
@@ -67,7 +69,6 @@ struct WebServer {
     notify_port: Port<()>,
     shared_notify_chan: SharedChan<()>,
 }
-
 impl WebServer {
     fn new(ip: &str, port: uint, www_dir: &str) -> WebServer {
         let (notify_port, shared_notify_chan) = SharedChan::new();
@@ -201,22 +202,56 @@ impl WebServer {
     }
     
     // TODO: Server-side gashing.
-    fn respond_with_dynamic_page(stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
+
+    fn respond_with_dynamic_page(mut stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
         // for now, just serve as static file
 
 
-        let mut stream = stream;
-        let test: ~str = ~"TestTing";
-        let response: ~str = ~"response";
-        //println!("{:s}", stream.read_to_str());
-        while (){
-        println!("{:s}", stream.read_to_str());
+                let mut fileContent = File::open(path).read_to_str();
+                //println!("{:u}", fileContent.find_str("<!--").unwrap());
+
+                let splitstr: ~[&str] = fileContent.split_str("<!--").collect();
+                
+                let mut counter: uint = 0;
+                let mut command: ~str = ~"";
+
+                while counter < splitstr.len(){
+                    if splitstr[counter].contains("cmd"){
+
+                        let findCmd: ~[&str] = splitstr[counter].split(' ').collect();
+                            
+                            let mut secCount: uint = 0;
+                            while secCount < findCmd.len(){
+                                if findCmd[secCount].contains("cmd"){
+                                    command = findCmd[secCount].trim_right_chars(&'"').to_owned();
+                                    command = command.trim_left_chars(&'"').to_owned();
+                                    let lastCommand: ~[&str] = command.split('"').collect();
+                                    command = lastCommand[1].to_owned();
+                                }
+                                secCount = secCount + 1;
+                            }
+                    }
+                    counter = counter + 1;
+                }
+                
+        let mut cmdOutput: ~str = ~"";
+        match command{
+            ~"" => { println("no command found")}
+            _   => {
+                    cmdOutput = gash::run_cmdline(command);
+                    println!("{:s}", cmdOutput);
+            }
         }
+        
+        let mut msg: ~str = format!("<!--\\#exec cmd='{:s}' -->", command);
+        msg = msg.replace("'", "\"");
+        println!("{:s}", msg);
+        
+        if cmdOutput != ~"" {fileContent = fileContent.replace(msg,cmdOutput);}
+        println!("{:s}", fileContent);
 
+        stream.write(fileContent.as_bytes());
 
-        stream.write(response.as_bytes());
-
-        WebServer::respond_with_static_file(stream, path);
     }
     
     // TODO: Smarter Scheduling.
