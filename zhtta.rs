@@ -24,7 +24,7 @@ use std::hashmap::HashMap;
 
 use extra::getopts;
 use extra::arc::MutexArc;
-
+use extra::arc::RWArc;
 pub mod gash;
 
 static SERVER_NAME : &'static str = "Zhtta Version 0.5";
@@ -42,8 +42,6 @@ static COUNTER_STYLE : &'static str = "<doctype !html><html><head><title>Hello, 
                     h2 { font-size:2cm; text-align: center; color: black; text-shadow: 0 0 4mm green }
              </style></head>
              <body>";
-
-static mut visitor_count : uint = 0;
 
 struct HTTP_Request {
     // Use peer_name as the key to access TcpStream in hashmap. 
@@ -86,11 +84,12 @@ impl WebServer {
     }
     
     fn run(&mut self) {
-        self.listen();
+        let counter: RWArc<uint> = RWArc::new(0);
+        self.listen(counter);
         self.dequeue_static_file_request();
     }
     
-    fn listen(&mut self) {
+    fn listen(&mut self,counter:RWArc<uint>) {
         let addr = from_str::<SocketAddr>(format!("{:s}:{:u}", self.ip, self.port)).expect("Address error.");
         let www_dir_path_str = self.www_dir_path.as_str().expect("invalid www path?").to_owned();
         
@@ -102,17 +101,20 @@ impl WebServer {
             let mut acceptor = net::tcp::TcpListener::bind(addr).listen();
             println!("{:s} listening on {:s} (serving from: {:s}).", 
                      SERVER_NAME, addr.to_str(), www_dir_path_str);
-            
+
             for stream in acceptor.incoming() {
                 let (queue_port, queue_chan) = Chan::new();
                 queue_chan.send(request_queue_arc.clone());
-                
+                counter.write(|count: &mut uint|{*count +=1});
+                let (port, chan) = Chan::new();
+                chan.send(counter.clone());
                 let notify_chan = shared_notify_chan.clone();
                 let stream_map_arc = stream_map_arc.clone();
                 
                 // Spawn a task to handle the connection.
                 spawn(proc() {
-                    unsafe { visitor_count += 1; } // TODO: Fix unsafe counter
+                    let counter2=port.recv();
+
                     let request_queue_arc = queue_port.recv();
                   
                     let mut stream = stream;
@@ -141,7 +143,7 @@ impl WebServer {
                              
                         if path_str == ~"./" {
                             debug!("===== Counter Page request =====");
-                            WebServer::respond_with_counter_page(stream);
+                            WebServer::respond_with_counter_page(stream,counter2);
                             debug!("=====Terminated connection from [{:s}].=====", peer_name);
                         } else if !path_obj.exists() || path_obj.is_dir() {
                             debug!("===== Error page request =====");
@@ -169,14 +171,15 @@ impl WebServer {
         stream.write(msg.as_bytes());
     }
 
-    // TODO: Safe visitor counter.
-    fn respond_with_counter_page(stream: Option<std::io::net::tcp::TcpStream>) {
+    fn respond_with_counter_page(stream: Option<std::io::net::tcp::TcpStream>,counter:RWArc<uint>) {
+        let mut counter2: uint=0;
+        counter.read(|count| counter2=count.clone());
         let mut stream = stream;
         let response: ~str = 
             format!("{:s}{:s}<h1>Greetings, Krusty!</h1>
                      <h2>Visitor count: {:u}</h2></body></html>\r\n", 
                     HTTP_OK, COUNTER_STYLE, 
-                    unsafe { visitor_count } );
+                    counter2);
         debug!("Responding to counter request");
         stream.write(response.as_bytes());
     }
@@ -189,8 +192,7 @@ impl WebServer {
         stream.write(HTTP_OK.as_bytes());
         stream.write(file_reader.read_to_end());
     }
-    
-    // TODO: Server-side gashing.
+
     fn respond_with_dynamic_page(mut stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
         let mut fileContent = File::open(path).read_to_str();
                 //println!("{:u}", fileContent.find_str("<!--").unwrap());
