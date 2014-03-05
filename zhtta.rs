@@ -50,6 +50,7 @@ struct HTTP_Request {
     //  See issue: https://github.com/mozilla/rust/issues/12139)
     peer_name: ~str,
     path: ~Path,
+    length: ~uint,
 }
 
 struct WebServer {
@@ -257,8 +258,12 @@ impl WebServer {
     // TODO: Smarter Scheduling.
     fn enqueue_static_file_request(stream: Option<std::io::net::tcp::TcpStream>, path_obj: &Path, stream_map_arc: MutexArc<HashMap<~str, Option<std::io::net::tcp::TcpStream>>>, req_queue_arc: MutexArc<~[HTTP_Request]>, notify_chan: SharedChan<()>) {
         // Save stream in hashmap for later response.
+        //let stat= fs::stat(path_obj);
+        let length= File::open(path_obj).read_to_end().len();
+
         let mut stream = stream;
         let peer_name = WebServer::get_peer_name(&mut stream);
+        //println!("peer_NAME: {}",peer_name);
         let (stream_port, stream_chan) = Chan::new();
         stream_chan.send(stream);
         unsafe {
@@ -270,7 +275,7 @@ impl WebServer {
         }
         
         // Enqueue the HTTP request.
-        let req = HTTP_Request { peer_name: peer_name.clone(), path: ~path_obj.clone() };
+        let req = HTTP_Request { peer_name: peer_name.clone(), path: ~path_obj.clone(), length: ~length.clone() };
         let (req_port, req_chan) = Chan::new();
         req_chan.send(req);
 
@@ -278,32 +283,69 @@ impl WebServer {
         req_queue_arc.access(|local_req_queue| {
             debug!("Got queue mutex lock.");
             let req: HTTP_Request = req_port.recv();
-            
         if(peer_name.contains("128.143.")||peer_name.contains("132.54."))
         {
-            for i in range(0, local_req_queue.len())
+            if(local_req_queue.len()==0)
             {
-                if!(local_req_queue[i].peer_name.contains("128.143.")||local_req_queue[i].peer_name.contains("132.54."))
+                 local_req_queue.push(req);
+            }
+            else
+            {
+                for i in range(0, local_req_queue.len())
                 {
-                    local_req_queue.insert(i,req);
-                    break;
-                }
-                else 
-                {
-                    if i==local_req_queue.len()
+                    if(!local_req_queue[i].peer_name.contains("128.143.")&&!local_req_queue[i].peer_name.contains("132.54."))
                     {
-                        local_req_queue.push(req);
+                        local_req_queue.insert(i,req);
                         break;
                     }
-                }
+                    else
+                    {
+                        if(~length>local_req_queue[i].length)
+                        {
+                            local_req_queue.insert(i,req);
+                            break;
+                        }
+                        if i==local_req_queue.len()-1
+                        {
+                            local_req_queue.push(req);
+                            break;
+                        }
+                    }
             
+                }
             }
         }
         else
         {
-            local_req_queue.push(req);
-        }
+            //println!("HELLO {} ",local_req_queue.len());
+            if(local_req_queue.len()==0)
+            {
+                 local_req_queue.push(req);
+            }
+            else
+            {
+                for i in range(0, local_req_queue.len())
+                {
+                    if(!local_req_queue[i].peer_name.contains("128.143.")&&!local_req_queue[i].peer_name.contains("132.54.")&&~length<local_req_queue[i].length)
+                    {
+                        local_req_queue.insert(i,req);
+                        break;
+                    }
+                    else
+                    {
+                        if i==local_req_queue.len()-1
+                        {
+                            local_req_queue.push(req);
+                            break;
+                        }
+                    }
+            
+                }
+            }
 
+        }
+            //println!("HERE: {}", local_req_queue.len());
+            //local_req_queue.push(req);
             debug!("A new request enqueued, now the length of queue is {:u}.", local_req_queue.len());
         });
         
@@ -312,7 +354,7 @@ impl WebServer {
     
     }
     
-    // TODO: Smarter Scheduling.
+    // TODO: Smarter Scheduling. // Not sure what else to do for smarter scheduling
     fn dequeue_static_file_request(&mut self) {
         let req_queue_get = self.request_queue_arc.clone();
         let stream_map_get = self.stream_map_arc.clone();
