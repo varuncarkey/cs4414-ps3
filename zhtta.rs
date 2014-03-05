@@ -278,7 +278,32 @@ impl WebServer {
         req_queue_arc.access(|local_req_queue| {
             debug!("Got queue mutex lock.");
             let req: HTTP_Request = req_port.recv();
+            
+        if(peer_name.contains("128.143.")||peer_name.contains("132.54."))
+        {
+            for i in range(0, local_req_queue.len())
+            {
+                if!(local_req_queue[i].peer_name.contains("128.143.")||local_req_queue[i].peer_name.contains("132.54."))
+                {
+                    local_req_queue.insert(i,req);
+                    break;
+                }
+                else 
+                {
+                    if i==local_req_queue.len()
+                    {
+                        local_req_queue.push(req);
+                        break;
+                    }
+                }
+            
+            }
+        }
+        else
+        {
             local_req_queue.push(req);
+        }
+
             debug!("A new request enqueued, now the length of queue is {:u}.", local_req_queue.len());
         });
         
