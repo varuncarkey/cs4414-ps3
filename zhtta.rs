@@ -89,8 +89,9 @@ impl WebServer {
     
     fn run(&mut self) {
         let counter: RWArc<uint> = RWArc::new(0);
+        let cache: RWArc<HashMap<~str, ~str>> = RWArc::new(HashMap::new());
         self.listen(counter);
-        self.dequeue_static_file_request();
+        self.dequeue_static_file_request(cache);
     }
     
     fn listen(&mut self,counter:RWArc<uint>) {
@@ -190,15 +191,18 @@ impl WebServer {
     
     // TODO: Streaming file.
     // TODO: Application-layer file caching.
-    fn respond_with_static_file(stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
+    fn respond_with_static_file(stream: Option<std::io::net::tcp::TcpStream>, path: &Path, cache: RWArc<HashMap<~str, ~str>>) {
         let mut stream = stream;
-        println!("FILE PATH {:s}", path.display().to_str());
-        let mut cache: HashMap<~str, ~str> = HashMap::new();
+        //println("GOT HERE ");
+        //println!("FILE PATH {:s}", path.display().to_str());
+        //let mut cache: HashMap<~str, ~str> = HashMap::new();
+        let mut mapout=HashMap::new();
+        cache.read(|map|{mapout=map.clone()});
 
-        if(cache.contains_key(&(path.display().to_str())))
+        if(mapout.contains_key(&(path.display().to_str())))
         {
-            println("GOT HERE ");
-            let file_cont: ~str = cache.get(&(path.display().to_str())).to_owned();
+
+            let file_cont: ~str = mapout.get(&(path.display().to_str())).to_owned();
             stream.write(file_cont.as_bytes());
         }
         else
@@ -231,9 +235,11 @@ impl WebServer {
 
                 }
             }
-            println!("Path FILE: {} FILE_CONETENDS :{}",path.display().to_str(),file_contents);
-            cache.insert(path.display().to_str(),file_contents);
-            println!("{}",cache.to_str());
+            //println!("Path FILE: {} FILE_CONETENDS :{}",path.display().to_str(),file_contents);
+            //cache.access(|map| //{map.insert(path.display().to_str(),file_contents.clone())});
+            mapout.insert(path.display().to_str(),file_contents.clone());
+            cache.write(|map| {*map=mapout.clone()});
+            //cache.read(|map|{println!("{}",map.to_str())});
 
         }
     }
@@ -383,12 +389,13 @@ impl WebServer {
     }
     
     // TODO: Smarter Scheduling. // Not sure what else to do for smarter scheduling
-    fn dequeue_static_file_request(&mut self) {
+    fn dequeue_static_file_request(&mut self,cache: RWArc<HashMap<~str, ~str>>) {
         let req_queue_get = self.request_queue_arc.clone();
         let stream_map_get = self.stream_map_arc.clone();
         
         // Port<> cannot be sent to another task. So we have to make this task as the main task that can access self.notify_port.
-        
+        let(proc3, chan3)=Chan::new();
+        chan3.send(cache);
         let (request_port, request_chan) = Chan::new();
         loop {
             self.notify_port.recv();    // waiting for new request enqueued.
@@ -417,11 +424,13 @@ impl WebServer {
                     stream_chan.send(stream);
                 });
             }
-            
+
+            let(proc2, chan2)=Chan::new();
+            chan2.send(proc3.recv());
             // TODO: Spawning more tasks to respond the dequeued requests concurrently. You may need a semophore to control the concurrency.
             spawn(proc() {
                 let stream = stream_port.recv();
-                WebServer::respond_with_static_file(stream, request.path);
+                WebServer::respond_with_static_file(stream, request.path, proc2.recv());
                 // Close stream automatically.
                 debug!("=====Terminated connection from [{:s}].=====", request.peer_name);
                 chan1.send("yes");
