@@ -25,6 +25,9 @@ use std::hashmap::HashMap;
 use extra::getopts;
 use extra::arc::MutexArc;
 use extra::arc::RWArc;
+use extra::sync::Semaphore;
+
+
 pub mod gash;
 
 static SERVER_NAME : &'static str = "Zhtta Version 0.5";
@@ -189,25 +192,50 @@ impl WebServer {
     // TODO: Application-layer file caching.
     fn respond_with_static_file(stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
         let mut stream = stream;
-        let mut file_reader = File::open(path).expect("Invalid file!");
-        stream.write(HTTP_OK.as_bytes());
-	//stream.write(file_reader.read_to_end());	
-	let stat= fs::stat(path);
-	let mut length=stat.size;
-	
-        while(length>0)
-	{
-	  if(length>1000)
-	  {
-	   length -=1000;
-  	   stream.write(file_reader.read_bytes(1000)); 
-	  }
-	  else
-   	  {
-  	    length=0;
-	    stream.write(file_reader.read_to_end());
-	  }
-	}
+        println!("FILE PATH {:s}", path.display().to_str());
+        let mut cache: HashMap<~str, ~str> = HashMap::new();
+
+        if(cache.contains_key(&(path.display().to_str())))
+        {
+            println("GOT HERE ");
+            let file_cont: ~str = cache.get(&(path.display().to_str())).to_owned();
+            stream.write(file_cont.as_bytes());
+        }
+        else
+        {
+            let mut file_reader = File::open(path).expect("Invalid file!");
+
+            stream.write(HTTP_OK.as_bytes());
+            //stream.write(file_reader.read_to_end());
+            let stat= fs::stat(path);
+            let mut length=stat.size;
+            let mut file_contents: ~str=~"";
+            while(length>0)
+            {
+                if(length>1000)
+                {
+                    length -=1000;
+                    let contents=file_reader.read_bytes(1000);
+                    file_contents.push_str(str::from_utf8(contents));//str::from_utf8(contents);
+                    stream.write(contents);
+
+                }
+                else
+                {
+                    length=0;
+                    let contents=file_reader.read_to_end();
+                    file_contents.push_str(str::from_utf8(contents));
+                    //file_contents+=str::from_utf8(contents);
+                    //file_contents.push(contents.clone());
+                    stream.write(contents);
+
+                }
+            }
+            println!("Path FILE: {} FILE_CONETENDS :{}",path.display().to_str(),file_contents);
+            cache.insert(path.display().to_str(),file_contents);
+            println!("{}",cache.to_str());
+
+        }
     }
 
     fn respond_with_dynamic_page(mut stream: Option<std::io::net::tcp::TcpStream>, path: &Path) {
@@ -364,19 +392,22 @@ impl WebServer {
         let (request_port, request_chan) = Chan::new();
         loop {
             self.notify_port.recv();    // waiting for new request enqueued.
-            
+            let mut done=false;
+            let resources= Semaphore::new(4);
             req_queue_get.access( |req_queue| {
                 match req_queue.shift_opt() { // FIFO queue.
-                    None => { /* do nothing */ }
+                    None => { done=true; }
                     Some(req) => {
                         request_chan.send(req);
+                        resources.acquire();
                         debug!("A new request dequeued, now the length of queue is {:u}.", req_queue.len());
                     }
                 }
             });
-            
+            let(proc1, chan1)=Chan::new();
+
             let request = request_port.recv();
-            
+
             // Get stream from hashmap.
             // Use unsafe method, because TcpStream in Rust 0.9 doesn't have "Freeze" bound.
             let (stream_port, stream_chan) = Chan::new();
@@ -388,12 +419,21 @@ impl WebServer {
             }
             
             // TODO: Spawning more tasks to respond the dequeued requests concurrently. You may need a semophore to control the concurrency.
-            let stream = stream_port.recv();
-            WebServer::respond_with_static_file(stream, request.path);
-            // Close stream automatically.
-            debug!("=====Terminated connection from [{:s}].=====", request.peer_name);
+            spawn(proc() {
+                let stream = stream_port.recv();
+                WebServer::respond_with_static_file(stream, request.path);
+                // Close stream automatically.
+                debug!("=====Terminated connection from [{:s}].=====", request.peer_name);
+                chan1.send("yes");
+
+            });
+            if(proc1.recv()=="yes")
+            {
+                resources.release();
+            }
+            }
         }
-    }
+
     
     fn get_peer_name(stream: &mut Option<std::io::net::tcp::TcpStream>) -> ~str {
         match *stream {
